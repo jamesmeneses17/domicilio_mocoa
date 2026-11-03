@@ -1,0 +1,6 @@
+.env
+.venv/
+audio_tmp/
+voz_modelos/
+__pycache__/
+*.pyc

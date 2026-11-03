@@ -1,0 +1,24 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: domicilios_db
+    environment:
+      POSTGRES_USER: domicilios
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-domicilios_dev}
+      POSTGRES_DB: domicilios
+    ports:
+      - "127.0.0.1:5432:5432"   # solo accesible desde tu PC
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro   # se ejecuta solo la primera vez
+  adminer:   # visor web de la base de datos: http://127.0.0.1:8080
+    image: adminer:latest
+    container_name: domicilios_adminer
+    depends_on: [db]
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+      ADMINER_DESIGN: pepa-linha-dark
+    ports:
+      - "127.0.0.1:8080:8080"   # solo accesible desde tu PC
+volumes:
+  pgdata:
