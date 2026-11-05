@@ -97,8 +97,13 @@ def buscar_menu(ctx, restaurante_id=None, texto=None, temperatura=None, etiqueta
     """Lista productos disponibles con precio, atributos y si el restaurante está abierto ahora.
 
     Para recomendar según el contexto se filtra por temperatura (caliente|fria), etiqueta o categoría."""
-    rid = int(restaurante_id) if restaurante_id not in (None, "") else None
-    patron = f"%{texto}%" if texto else None
+    try:
+        rid = int(restaurante_id) if restaurante_id not in (None, "") else None
+    except (TypeError, ValueError):
+        rid = None
+    nota = None
+    if rid is not None and not q("SELECT 1 FROM restaurantes WHERE id=%s AND activo", (rid,), uno=True):
+        rid, nota = None, f"El restaurante {restaurante_id} no existe o no está activo; se buscó en todos."
     temp = temperatura if temperatura in ("caliente", "fria") else None
     etq = etiqueta if etiqueta in ETIQUETAS else None
     cat = f"%{categoria}%" if categoria else None
@@ -107,16 +112,27 @@ def buscar_menu(ctx, restaurante_id=None, texto=None, temperatura=None, etiqueta
            "r.hora_apertura, r.hora_cierre "
            "FROM productos p JOIN restaurantes r ON r.id=p.restaurante_id "
            "WHERE p.disponible AND r.activo AND (%s::int IS NULL OR r.id=%s) "
-           "AND (%s::text IS NULL OR p.nombre ILIKE %s OR p.descripcion ILIKE %s OR r.nombre ILIKE %s "
-           "     OR p.categoria ILIKE %s) "
+           "AND (%s::text IS NULL OR unaccent(p.nombre) ILIKE unaccent(%s) OR unaccent(p.descripcion) ILIKE unaccent(%s) "
+           "     OR unaccent(r.nombre) ILIKE unaccent(%s) OR unaccent(p.categoria) ILIKE unaccent(%s)) "
            "AND (%s::text IS NULL OR p.temperatura=%s) AND (%s::text IS NULL OR %s = ANY(p.etiquetas)) "
-           "AND (%s::text IS NULL OR p.categoria ILIKE %s) "
+           "AND (%s::text IS NULL OR unaccent(p.categoria) ILIKE unaccent(%s)) "
            "ORDER BY r.id, p.id")
-    filas = q(sql, (rid, rid, patron, patron, patron, patron, patron, temp, temp, etq, etq, cat, cat))
-    nota = None
+
+    def _buscar(txt):
+        pat = f"%{txt}%" if txt else None
+        return q(sql, (rid, rid, pat, pat, pat, pat, pat, temp, temp, etq, etq, cat, cat))
+
+    filas = _buscar(texto)
+    if not filas and texto:  # "milo caliente" no aparece entero: probar cada palabra suelta
+        vistos = {}
+        for palabra in re.findall(r"\w{3,}", str(texto)):
+            for f in _buscar(palabra):
+                vistos.setdefault(f["producto_id"], f)
+        filas = list(vistos.values())
     if not filas and (texto or temp or etq or cat):
-        filas = q(sql, (rid, rid, None, None, None, None, None, None, None, None, None, None, None))
-        nota = "Nada coincide exactamente con el filtro; se muestra el menú completo."
+        filas = _buscar(None) if not (temp or etq or cat) else q(sql, (rid, rid, None, None, None, None, None,
+                                                                       None, None, None, None, None, None))
+        nota = (nota or "") + " Nada coincide exactamente con el filtro; se muestra el menú completo."
     t = config.ahora().time()
     out = [{"producto_id": f["producto_id"], "producto": f["producto"],
             "descripcion": f["descripcion"], "precio": f["precio"], "categoria": f["categoria"],
@@ -308,8 +324,14 @@ def crear_pedido(ctx, restaurante_id, items, direccion, barrio, metodo_pago, pro
                         (pid, i["producto_id"], i["cantidad"], i["precio_unitario"], i["observacion"]))
     evento(ctx["sesion_id"], "notificar_restaurante",
            {"pedido_id": pid, "restaurante": c["restaurante"]}, {"estado": estado}, pedido_id=pid)
-    return {"ok": True, "pedido_id": pid, "estado": estado, "restaurante": c["restaurante"],
-            "subtotal": c["subtotal"], "costo_domicilio": c["costo_domicilio"], "total": c["total"]}
+    res = {"ok": True, "pedido_id": pid, "estado": estado, "restaurante": c["restaurante"],
+           "subtotal": c["subtotal"], "costo_domicilio": c["costo_domicilio"], "total": c["total"],
+           "recibo_url": f"/api/pedido/{pid}/recibo"}
+    if metodo_pago == "transferencia":
+        valor = f"{c['total']:,.0f}".replace(",", ".")
+        res["instrucciones_pago"] = (f"{config.PAGO_TRANSFERENCIA} Valor exacto: ${valor}; "
+                                     f"referencia: pedido {pid}. Muestra el comprobante al domiciliario.")
+    return res
 
 
 def estado_pedido(ctx, pedido_id=None):
@@ -489,7 +511,7 @@ def accion_domiciliario(pedido_id, accion):
         if p["estado"] != "asignado":
             raise ValueError(f"El pedido está en estado {p['estado']}.")
         q("UPDATE pedidos SET estado='en_camino', actualizado_en=now() WHERE id=%s", (pedido_id,))
-        return p["sesion_id"], f"Tu pedido {pedido_id} ya fue recogido y {p['domiciliario']} va en camino. 🛵"
+        return p["sesion_id"], f"Tu pedido {pedido_id} ya fue recogido y {p['domiciliario']} va en camino."
     if accion == "entregado":
         if p["estado"] != "en_camino":
             raise ValueError(f"El pedido está en estado {p['estado']}.")

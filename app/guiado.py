@@ -18,7 +18,7 @@ from datetime import timedelta
 import requests
 
 from . import config, logica
-from .agente import FUNCIONES, LOCK_LLM, _ejecutar_herramienta
+from .agente import FUNCIONES, LOCK_LLM, _ejecutar_herramienta, verificar
 from .db import dumps, q
 
 BORRADORES = {}  # sesion_id -> borrador del pedido en construcción
@@ -73,6 +73,7 @@ def _llm(sesion_id, system, user, formato=None, max_tokens=200, etiqueta="llm"):
 
 def usar(sesion_id, nombre, **args):
     """Ejecuta una herramienta y la deja en la bitácora."""
+    verificar()
     ctx = {"sesion_id": sesion_id}
     t0 = time.time()
     try:
@@ -511,8 +512,9 @@ def _confirmar(sesion_id, d):
     if r["estado"] == "programado":
         return (f"¡Listo! Tu pedido {r['pedido_id']} quedó programado ({dinero(r['total'])}). "
                 "Lo enviaremos al restaurante unos 40 minutos antes de la hora.")
+    pago = f"\nPara pagar: {r['instrucciones_pago']}" if r.get("instrucciones_pago") else ""
     return (f"¡Listo! Tu pedido {r['pedido_id']} fue enviado a {r['restaurante']} (total {dinero(r['total'])}). "
-            "Te aviso apenas lo acepten.")
+            f"Te aviso apenas lo acepten.{pago}\nRecibo en PDF: {r['recibo_url']}")
 
 
 def _pedido_objetivo(sesion_id, ex, texto, solo_activos=True):
@@ -538,7 +540,7 @@ def _responder_pregunta(sesion_id, texto):
     k = usar(sesion_id, "consultar_conocimiento", pregunta=texto)
     if k.get("resultados") and k["resultados"][0]["similitud"] < 0.3:
         return ("Con gusto, pero solo puedo ayudarte con domicilios: pedidos, menús, estados, "
-                "pagos y cancelaciones. 🙂")
+                "pagos y cancelaciones.")
     if not k.get("suficiente"):
         usar(sesion_id, "escalar_a_humano", motivo=f"Sin información confiable para: {texto[:120]}")
         return ("No tengo esa información con seguridad, así que pasé tu consulta a un despachador "
@@ -557,14 +559,54 @@ def _responder_pregunta(sesion_id, texto):
         return k["resultados"][0]["contenido"]
 
 
+_NUMEROS = {"un": 1, "una": 1, "uno": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5}
+_DIRECCION = re.compile(r"\b((?:calle|cl|carrera|cra|cr|avenida|av|diagonal|transversal|manzana|mz)\.?\s*\d+[^,;.\n]{0,40})")
+
+
+def _reconstruir(sesion_id, d, id_actual):
+    """Rehace el borrador del pedido leyendo los mensajes anteriores, SIN usar el LLM (reglas).
+
+    Se usa cuando este modo toma el relevo de Gemini (o el servidor se reinició): el borrador vive en memoria y solo
+    lo llenan los turnos de este modo, así que sin esto el pedido empezaría de cero y se perdería el contexto."""
+    desde = q("SELECT max(p.creado_en) AS t FROM pedidos p JOIN clientes c ON c.id=p.cliente_id "
+              "WHERE c.sesion_id=%s", (sesion_id,), uno=True)["t"]  # lo anterior al último pedido ya está cerrado
+    filas = q("SELECT contenido FROM mensajes WHERE sesion_id=%s AND rol='usuario' AND id<%s "
+              "AND (%s::timestamptz IS NULL OR creado_en > %s) ORDER BY id DESC LIMIT 12",
+              (sesion_id, id_actual, desde, desde))
+    for f in reversed(filas):
+        t = f["contenido"]
+        prod = resolver_producto(t) if _hay_producto(t) else None
+        if prod:
+            cant = next((_NUMEROS[w] for w in norm(t).split() if w in _NUMEROS), None)
+            cant = cant if cant and cant > 1 else (int(m.group(1)) if (m := re.search(r"\b(\d{1,2})\b", t)) else 1)
+            d["items"] = [{"producto_id": prod["id"], "restaurante_id": prod["restaurante_id"], "nombre": prod["nombre"],
+                           "precio": prod["precio"], "cantidad": max(1, min(cant, 20)), "observacion": None}]
+        d["barrio"] = _zona_en_texto(t) or d["barrio"]
+        d["pago"] = _pago(t) or d["pago"]
+        dire = _DIRECCION.search(t.lower())
+        if dire:
+            d["direccion"] = dire.group(1).strip()
+    if any((d["items"], d["barrio"], d["direccion"], d["pago"])):
+        ult = q("SELECT contenido FROM mensajes WHERE sesion_id=%s AND rol='agente' ORDER BY id DESC LIMIT 1",
+                (sesion_id,), uno=True)
+        completo = all((d["items"], d["barrio"], d["direccion"], d["pago"]))
+        if completo and ult and re.search(r"confirm", ult["contenido"].lower()):
+            d["esperando_confirmacion"] = True  # el agente anterior acababa de pedir la confirmación
+        logica.evento(sesion_id, "contexto_recuperado", {"mensajes_leidos": len(filas)},
+                      {"items": [i["nombre"] for i in d["items"]], "barrio": d["barrio"],
+                       "direccion": d["direccion"], "pago": d["pago"]})
+
+
 def ejecutar(sesion_id, despacho=False):
     t_total = time.time()
     cli = q("SELECT nombre FROM clientes WHERE sesion_id=%s", (sesion_id,), uno=True)
     nombre = cli["nombre"] if cli else "cliente"
-    ultimo = q("SELECT contenido FROM mensajes WHERE sesion_id=%s AND rol='usuario' ORDER BY id DESC LIMIT 1",
+    ultimo = q("SELECT id, contenido FROM mensajes WHERE sesion_id=%s AND rol='usuario' ORDER BY id DESC LIMIT 1",
                (sesion_id,), uno=True)
     texto = ultimo["contenido"] if ultimo else ""
     d = BORRADORES.setdefault(sesion_id, _nuevo())
+    if ultimo and not any((d["items"], d["barrio"], d["direccion"], d["pago"], d["falta"])):
+        _reconstruir(sesion_id, d, ultimo["id"])
     msg = _turno(sesion_id, d, nombre, texto)
     return msg, int((time.time() - t_total) * 1000)
 
@@ -635,7 +677,7 @@ def _turno(sesion_id, d, nombre, texto):
     if intencion == "saludo":
         return f"¡Hola {nombre}! Soy el despachador virtual de {config.NOMBRE_EMPRESA}. ¿Qué te gustaría pedir hoy?"
     if intencion == "otro":
-        return "Con gusto, pero solo puedo ayudarte con domicilios: pedidos, menús, estados y cancelaciones. 🙂"
+        return "Con gusto, pero solo puedo ayudarte con domicilios: pedidos, menús, estados y cancelaciones."
     if intencion == "menu":
         rest = _restaurante_mencionado(texto)
         return _menu_de(sesion_id, rest) if rest else _texto_restaurantes(sesion_id)

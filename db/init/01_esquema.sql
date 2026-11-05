@@ -1,4 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS unaccent;
+-- La columna productos.imagen (foto) se agrega sola al arrancar el servidor (ALTER ... IF NOT EXISTS en app/main.py).
 
 CREATE TABLE zonas (
   id SERIAL PRIMARY KEY,

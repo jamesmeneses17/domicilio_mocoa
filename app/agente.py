@@ -1,4 +1,5 @@
 """Agente despachador: ciclo LLM + herramientas sobre Ollama, con trazabilidad."""
+import contextvars
 import inspect
 import json
 import re
@@ -13,24 +14,72 @@ from .db import dumps, q
 LOCK_LLM = threading.Lock()  # un solo modelo en CPU: se atiende de a una petición
 _activos = 0
 _lock_activos = threading.Lock()
+_gen = {}        # sesion_id -> número del turno vigente (subirlo invalida el turno que esté corriendo)
+_corriendo = {}  # sesion_id -> número del turno que está pensando ahora
+_turno = contextvars.ContextVar("turno", default=None)  # (sesion_id, gen) del turno que ejecuta este hilo
+
+
+class Cancelado(BaseException):  # BaseException: los "except Exception" de las herramientas no deben taparla
+    """El cliente detuvo o reemplazó este turno: se abandona sin guardar respuesta."""
+
+
+def nuevo_turno(sesion_id) -> int:
+    """Abre un turno para la sesión e invalida el anterior (así un mensaje nuevo reemplaza al que estaba pensando)."""
+    with _lock_activos:
+        _gen[sesion_id] = _gen.get(sesion_id, 0) + 1
+        _corriendo[sesion_id] = _gen[sesion_id]
+        return _gen[sesion_id]
+
+
+def detener(sesion_id) -> bool:
+    """Detiene el turno en curso. Devuelve True si había uno pensando."""
+    with _lock_activos:
+        habia = sesion_id in _corriendo
+        _gen[sesion_id] = _gen.get(sesion_id, 0) + 1
+        _corriendo.pop(sesion_id, None)
+        return habia
+
+
+def vigente(sesion_id, gen) -> bool:
+    return _gen.get(sesion_id, 0) == gen
+
+
+def verificar():
+    """Punto de control: se llama entre pasos (antes de cada llamada al modelo o herramienta)."""
+    t = _turno.get()
+    if t and not vigente(*t):
+        raise Cancelado()
 
 
 class trabajando:
     """Marca que hay un turno del agente en curso (para el indicador 'pensando' de la interfaz)."""
 
+    def __init__(self, sesion_id=None, gen=None):
+        self.sesion_id, self.gen = sesion_id, gen
+
     def __enter__(self):
         global _activos
         with _lock_activos:
             _activos += 1
+        if self.sesion_id is not None:
+            self.token = _turno.set((self.sesion_id, self.gen))
 
     def __exit__(self, *a):
         global _activos
         with _lock_activos:
             _activos -= 1
+            if self.sesion_id is not None and _corriendo.get(self.sesion_id) == self.gen:
+                _corriendo.pop(self.sesion_id, None)
+        if self.sesion_id is not None:
+            _turno.reset(self.token)
 
 
-def pensando() -> bool:
-    return _activos > 0
+def pensando(sesion_id=None) -> bool:
+    return sesion_id in _corriendo if sesion_id else _activos > 0
+
+
+def sesiones_pensando() -> list:
+    return list(_corriendo)
 
 
 def _t(nombre, desc, props, req):
@@ -126,8 +175,23 @@ FUNCIONES = {f.__name__: f for f in (
     logica.escalar_a_humano, logica.candidatos_domiciliario, logica.asignar_domiciliario)}
 
 
-def prompt_sistema(cliente):
+def _pedidos_del_cliente(sesion_id):
+    """Resumen de los pedidos de esta conversación, para que el modelo distinga uno nuevo de uno ya cerrado."""
+    filas = q("SELECT p.id, p.estado, p.total, p.metodo_pago, p.direccion_entrega, r.nombre AS restaurante "
+              "FROM pedidos p JOIN clientes c ON c.id=p.cliente_id JOIN restaurantes r ON r.id=p.restaurante_id "
+              "WHERE c.sesion_id=%s ORDER BY p.id DESC LIMIT 5", (sesion_id,))
+    if not filas:
+        return "Este cliente todavía no tiene pedidos."
+    cerrados = ("entregado", "cancelado", "rechazado")
+    return "\n".join(f"- Pedido {f['id']} en {f['restaurante']}: {f['estado']}"
+                     f"{' (CERRADO, ya no se puede modificar)' if f['estado'] in cerrados else ' (en curso)'}; "
+                     f"total {f['total']:,.0f}; pago {f['metodo_pago'] or 'sin definir'}; "
+                     f"dirección {f['direccion_entrega']}" for f in filas)
+
+
+def prompt_sistema(cliente, sesion_id=None):
     ahora = config.ahora()
+    pedidos = _pedidos_del_cliente(sesion_id) if sesion_id else ""
     return f"""Eres el "Despachador virtual" de {config.NOMBRE_EMPRESA}, una empresa de domicilios en Mocoa. \
 Hablas con clientes por chat, en español colombiano, con tono amable y breve (máximo 3 frases por mensaje).
 Ahora son las {ahora:%H:%M} del {ahora:%Y-%m-%d} (hora de Colombia). El cliente se llama {cliente}.
@@ -168,7 +232,20 @@ pregunta qué hay o qué tipos de comida, usa listar_restaurantes; para ver una 
 restaurante_id (o con texto/filtros) y no listes más de 4 o 5 opciones a la vez. Cada pedido es de un solo \
 restaurante. Muchos productos tienen varios tamaños: aclara cuál quiere (ej. 16 oz o 22 oz, personal o mediana).
 15. Bebidas alcohólicas (cerveza, michelada): no las recomiendes ni las ofrezcas por tu cuenta; si el cliente \
-las pide, confirma que es mayor de edad antes de crear el pedido."""
+las pide, confirma que es mayor de edad antes de crear el pedido.
+16. Un pedido ENTREGADO, CANCELADO o RECHAZADO está cerrado. Si el cliente pide algo después, es un pedido NUEVO: \
+no reutilices productos, restaurante ni totales del anterior; vuelve a buscar el menú, cotiza y pide confirmación \
+otra vez. Puedes preguntar si usa la misma dirección y forma de pago de la vez anterior, pero no los des por hechos.
+17. Los ids (producto_id, restaurante_id) salen SOLO de los resultados de las herramientas de este mismo turno. \
+Nunca los adivines ni los recuerdes de mensajes anteriores: si no tienes el id, llama a buscar_menu con el nombre \
+del producto y SIN restaurante_id. Busca con palabras cortas ("sandwich", "capuchino"). Si una búsqueda no encuentra \
+algo que antes ofreciste, vuelve a buscar sin filtros antes de decir que no existe.
+18. Formas de pago: efectivo (se paga al domiciliario al recibir) o transferencia. Con transferencia, después de \
+crear_pedido comunica tal cual 'instrucciones_pago' (a dónde y cuánto transferir) y comparte 'recibo_url', el \
+enlace del recibo en PDF. No pidas datos bancarios al cliente.
+
+Pedidos de este cliente:
+{pedidos}"""
 
 
 def _historial(sesion_id, limite=8):
@@ -240,13 +317,14 @@ def ejecutar(sesion_id, despacho=False):
     cli = q("SELECT * FROM clientes WHERE sesion_id=%s", (sesion_id,), uno=True)
     ctx = {"sesion_id": sesion_id, "cliente_id": cli["id"] if cli else None}
     herramientas = HERRAMIENTAS_CLIENTE + (HERRAMIENTAS_DESPACHO if despacho else [])
-    msgs = [{"role": "system", "content": prompt_sistema(cli["nombre"] if cli else "cliente")}]
+    msgs = [{"role": "system", "content": prompt_sistema(cli["nombre"] if cli else "cliente", sesion_id)}]
     msgs += _historial(sesion_id)
     t_total = time.time()
     final, fallos = "", 0
 
     with LOCK_LLM:
         for it in range(7):
+            verificar()
             t0 = time.time()
             try:
                 r = requests.post(f"{config.OLLAMA_URL}/api/chat", timeout=600, json={

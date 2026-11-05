@@ -5,11 +5,11 @@ from contextlib import asynccontextmanager
 
 import requests
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import agente, config, gemini, guiado, logica, voz
+from . import agente, config, gemini, guiado, logica, recibo, voz
 from .db import q
 
 ESTATICOS = os.path.join(os.path.dirname(__file__), "static")
@@ -34,6 +34,7 @@ def _tareas_fondo():
 
 @asynccontextmanager
 async def lifespan(app):
+    q("ALTER TABLE productos ADD COLUMN IF NOT EXISTS imagen TEXT")  # foto del producto (ruta bajo /productos/)
     threading.Thread(target=_tareas_fondo, daemon=True).start()
     yield
 
@@ -42,10 +43,20 @@ app = FastAPI(title="Agente despachador de domicilios", lifespan=lifespan)
 
 
 # ------------------------------------------------------------------ turnos del agente
-def turno_cliente(sesion_id, hablar):
-    """Un turno de conversación del cliente: agente -> mensaje -> (opcional) audio."""
-    with agente.trabajando():
-        texto, ms = agente.ejecutar(sesion_id)
+def turno_cliente(sesion_id, hablar, gen):
+    """Un turno de conversación del cliente: agente -> mensaje -> (opcional) audio.
+
+    `gen` identifica el turno: si el cliente lo detiene o escribe otro mensaje, deja de ser el vigente y su
+    respuesta se descarta (no se guarda ni se convierte a voz)."""
+    try:
+        with agente.trabajando(sesion_id, gen):
+            texto, ms = agente.ejecutar(sesion_id)
+    except agente.Cancelado:
+        logica.evento(sesion_id, "turno_detenido", {"motivo": "el cliente detuvo o reemplazó el mensaje"})
+        return
+    if not agente.vigente(sesion_id, gen):
+        logica.evento(sesion_id, "respuesta_descartada", {"motivo": "llegó tarde, el cliente ya corrigió"})
+        return
     audio = None
     if hablar:
         t0 = time.time()
@@ -104,6 +115,15 @@ class ChatIn(BaseModel):
     hablar: bool = False  # True: el agente responde también con audio (TTS)
 
 
+@app.get("/api/pedido/{pedido_id}/recibo")
+def recibo_pdf(pedido_id: int):
+    pdf = recibo.generar(pedido_id)
+    if not pdf:
+        raise HTTPException(404, "Pedido no encontrado.")
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="recibo-pedido-{pedido_id}.pdf"'})
+
+
 @app.post("/api/sesion")
 def sesion(d: SesionIn):
     nombre = d.nombre.strip()[:60] or "Cliente"
@@ -125,8 +145,21 @@ def chat(d: ChatIn, fondo: BackgroundTasks):
         raise HTTPException(400, "Mensaje vacío.")
     logica.guardar_mensaje(d.sesion_id, "usuario", texto)
     logica.evento(d.sesion_id, "mensaje_usuario", {"canal": "texto"}, {"texto": texto})
-    fondo.add_task(turno_cliente, d.sesion_id, d.hablar)
+    fondo.add_task(turno_cliente, d.sesion_id, d.hablar, agente.nuevo_turno(d.sesion_id))
     return {"ok": True}
+
+
+class DetenerIn(BaseModel):
+    sesion_id: str
+
+
+@app.post("/api/chat/detener")
+def detener(d: DetenerIn):
+    """Detiene lo que el agente esté haciendo para esta conversación, para que el cliente corrija su mensaje."""
+    habia = agente.detener(d.sesion_id)
+    if habia:
+        logica.evento(d.sesion_id, "detenido_por_cliente", {"accion": "botón Detener"})
+    return {"ok": True, "detenido": habia}
 
 
 @app.post("/api/voz")
@@ -146,7 +179,7 @@ async def mensaje_de_voz(fondo: BackgroundTasks, sesion_id: str = Form(...), aud
         raise HTTPException(422, "No se entendió el audio; intenta de nuevo.")
     logica.guardar_mensaje(sesion_id, "usuario", texto, "voz")
     logica.evento(sesion_id, "mensaje_usuario", {"canal": "voz"}, {"texto": texto})
-    fondo.add_task(turno_cliente, sesion_id, True)
+    fondo.add_task(turno_cliente, sesion_id, True, agente.nuevo_turno(sesion_id))
     return {"ok": True, "texto": texto}
 
 
@@ -156,7 +189,33 @@ def mensajes(sesion_id: str, desde: int = 0):
               "WHERE sesion_id=%s AND id>%s AND rol<>'sistema' ORDER BY id", (sesion_id, desde))
     return {"mensajes": [{**f, "audio": f"/api/audio/{f['audio_archivo']}" if f["audio_archivo"] else None}
                          for f in filas],
-            "pensando": agente.pensando()}
+            "pensando": agente.pensando(sesion_id)}
+
+
+@app.delete("/api/mensajes/{mensaje_id}")
+def borrar_mensaje(mensaje_id: int, sesion_id: str, desde_aqui: bool = False):
+    """Borra un mensaje (o ese y todos los siguientes) para que el agente no los use como contexto."""
+    m = q("SELECT id FROM mensajes WHERE id=%s AND sesion_id=%s", (mensaje_id, sesion_id), uno=True)
+    if not m:
+        raise HTTPException(404, "Mensaje no encontrado.")
+    agente.detener(sesion_id)  # si estaba pensando con ese contexto, se abandona
+    n = q("WITH b AS (DELETE FROM mensajes WHERE sesion_id=%s AND (id=%s OR (%s AND id>%s)) RETURNING 1) "
+          "SELECT count(*) AS n FROM b", (sesion_id, mensaje_id, desde_aqui, mensaje_id), uno=True)["n"]
+    BORRADORES_LIMPIAR(sesion_id)  # el borrador de pedido en memoria ya no corresponde a la conversación
+    logica.evento(sesion_id, "contexto_editado", {"borrados": n, "desde_aqui": desde_aqui})
+    return {"ok": True, "borrados": n}
+
+
+@app.post("/api/conversaciones/{sesion_id}/limpiar")
+def limpiar_contexto(sesion_id: str):
+    """Borra todos los mensajes de la conversación (el contexto) pero conserva al cliente y sus pedidos."""
+    if not q("SELECT 1 FROM clientes WHERE sesion_id=%s", (sesion_id,), uno=True):
+        raise HTTPException(404, "Conversación no encontrada.")
+    agente.detener(sesion_id)
+    q("DELETE FROM mensajes WHERE sesion_id=%s", (sesion_id,))
+    BORRADORES_LIMPIAR(sesion_id)
+    logica.evento(sesion_id, "contexto_limpiado", {"motivo": "el cliente limpió la conversación"})
+    return {"ok": True}
 
 
 @app.get("/api/audio/{archivo}")
@@ -209,6 +268,7 @@ def estado():
     doms = q("SELECT d.nombre, d.estado, d.pedidos_activos, z.nombre AS zona FROM domiciliarios d "
              "LEFT JOIN zonas z ON z.id=d.zona_id ORDER BY d.id")
     return {"pedidos": pedidos, "domiciliarios": doms, "pensando": agente.pensando(),
+            "pensando_sesiones": agente.sesiones_pensando(),
             "modelo": config.descripcion_modelo(), "proveedor": config.PROVEEDOR,
             "gemini": gemini.estado_claves() if config.PROVEEDOR == "gemini" else None}
 
@@ -337,6 +397,57 @@ def reiniciar():
     guiado._ULTIMO_CTX.clear()
     q("UPDATE productos SET disponible=true")
     q("UPDATE domiciliarios SET estado='libre', pedidos_activos=0")
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ imágenes de productos
+DIR_IMAGENES = os.path.join(ESTATICOS, "productos")
+EXT_IMAGEN = {".png", ".jpg", ".jpeg", ".webp"}
+MAX_IMAGEN = 3 * 1024 * 1024
+
+
+@app.get("/api/productos")
+def productos(texto: str = "", restaurante_id: int | None = None, solo_sin_imagen: bool = False):
+    """Productos con su imagen (para la pestaña Menú y para mostrar fotos en el chat)."""
+    pat = f"%{texto.strip()}%" if texto.strip() else None
+    filas = q("SELECT p.id, p.nombre, p.precio, p.disponible, p.imagen, r.id AS restaurante_id, r.nombre AS restaurante "
+              "FROM productos p JOIN restaurantes r ON r.id=p.restaurante_id "
+              "WHERE r.activo AND (%s::text IS NULL OR unaccent(p.nombre) ILIKE unaccent(%s) "
+              "OR unaccent(r.nombre) ILIKE unaccent(%s)) AND (%s::int IS NULL OR r.id=%s) "
+              "AND (NOT %s OR p.imagen IS NULL) ORDER BY r.id, p.id",
+              (pat, pat, pat, restaurante_id, restaurante_id, solo_sin_imagen))
+    return {"productos": filas, "con_imagen": sum(1 for f in filas if f["imagen"]), "total": len(filas)}
+
+
+@app.post("/api/productos/{producto_id}/imagen")
+async def subir_imagen(producto_id: int, imagen: UploadFile = File(...)):
+    if not q("SELECT 1 FROM productos WHERE id=%s", (producto_id,), uno=True):
+        raise HTTPException(404, "Producto no encontrado.")
+    ext = os.path.splitext(imagen.filename or "")[1].lower()
+    if ext not in EXT_IMAGEN:
+        raise HTTPException(400, "Usa una imagen PNG, JPG o WEBP.")
+    datos = await imagen.read()
+    if len(datos) > MAX_IMAGEN:
+        raise HTTPException(400, "La imagen pesa más de 3 MB.")
+    os.makedirs(DIR_IMAGENES, exist_ok=True)
+    for viejo in os.listdir(DIR_IMAGENES):  # una sola imagen por producto
+        if os.path.splitext(viejo)[0] == str(producto_id):
+            os.remove(os.path.join(DIR_IMAGENES, viejo))
+    nombre = f"{producto_id}{ext}"
+    with open(os.path.join(DIR_IMAGENES, nombre), "wb") as f:
+        f.write(datos)
+    ruta = f"/productos/{nombre}?v={int(time.time())}"  # ?v= evita que el navegador muestre la foto anterior
+    q("UPDATE productos SET imagen=%s WHERE id=%s", (ruta, producto_id))
+    return {"ok": True, "imagen": ruta}
+
+
+@app.delete("/api/productos/{producto_id}/imagen")
+def quitar_imagen(producto_id: int):
+    if os.path.isdir(DIR_IMAGENES):
+        for viejo in os.listdir(DIR_IMAGENES):
+            if os.path.splitext(viejo)[0] == str(producto_id):
+                os.remove(os.path.join(DIR_IMAGENES, viejo))
+    q("UPDATE productos SET imagen=NULL WHERE id=%s", (producto_id,))
     return {"ok": True}
 
 

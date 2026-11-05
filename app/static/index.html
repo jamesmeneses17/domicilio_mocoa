@@ -5,29 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Despachador de domicilios</title>
 <style>
-  /* Paleta DomicilAI: fondo índigo profundo, acento violeta, botones en píldora */
+  /* Paleta clara tomada de domicilai.com: fondo slate-50, texto slate-800, tarjetas blancas, tipografía Inter */
   :root {
-    --bg:#140a33; --panel:#1d1146; --ink:#f1edff; --mute:#a99fd0; --line:#34266b; --soft:#271a5c;
-    --brand:#8b5cf6; --brand-ink:#fff; --ok:#5fe0b0; --warn:#f6bd60; --bad:#ff8fa3; --info:#7cc0ff;
-    --yo:#173b4a; --agente:#2d1f6e; --sombra:0 8px 30px rgba(0,0,0,.35);
-    color-scheme:dark;
+    --bg:#f8fafc; --panel:#ffffff; --ink:#1e293b; --mute:#64748b; --line:#e2e8f0; --soft:#f1f5f9;
+    --brand:#1e293b; --brand-ink:#ffffff; --acento:#2563eb; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --info:#1d4ed8;
+    --yo:#ecfdf5; --agente:#f1f5f9; --sombra:0 1px 2px rgba(15,23,42,.05),0 4px 14px rgba(15,23,42,.05);
+    color-scheme:light;
   }
   * { box-sizing:border-box; }
   [v-cloak] { display:none; }
   [hidden] { display:none !important; }
   html, body { height:100%; }
-  body { margin:0; background:radial-gradient(1200px 600px at 80% -10%,#3b1d94 0%,var(--bg) 60%) fixed; color:var(--ink); font:14px/1.45 system-ui,"Segoe UI",Roboto,sans-serif; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 Inter,ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif; }
   button { font:inherit; color:inherit; cursor:pointer; border:1px solid var(--line); background:var(--panel);
            padding:6px 14px; border-radius:99px; }
-  button:hover { border-color:var(--brand); }
-  button.primario { background:linear-gradient(135deg,#a07bff,#7c4dff); color:var(--brand-ink); border-color:var(--brand); font-weight:600; }
+  button:hover { border-color:var(--mute); background:var(--soft); }
+  button.primario { background:var(--brand); color:var(--brand-ink); border-color:var(--brand); font-weight:600; }
+  button.primario:hover { background:#0f172a; border-color:#0f172a; }
   button.ok { background:var(--ok); color:#fff; border-color:var(--ok); }
   button.peligro { color:var(--bad); border-color:var(--bad); background:transparent; }
   button.fantasma { border-color:transparent; background:transparent; }
   button:disabled { opacity:.5; cursor:default; }
   input[type=text], input[type=search], select { font:inherit; color:var(--ink); background:var(--soft);
            border:1px solid var(--line); border-radius:9px; padding:8px 10px; width:100%; }
-  input:focus, select:focus { outline:2px solid var(--brand); outline-offset:-1px; }
+  input:focus, select:focus { outline:2px solid var(--acento); outline-offset:-1px; }
 
   .app { display:grid; grid-template-rows:auto minmax(0,1fr); height:100vh; }
   /* barra superior */
@@ -44,10 +45,12 @@
   .pill.on { color:var(--warn); border-color:var(--warn); }
   .franja { padding:6px 18px; font-size:12.5px; border-bottom:1px solid var(--line); background:var(--panel);
             display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; }
-  .franja.aviso { background:rgba(246,189,96,.10); color:var(--warn); border-color:var(--warn); }
+  .franja.aviso { background:#fffbeb; color:var(--warn); border-color:var(--warn); }
   .clave { padding:2px 10px; border-radius:99px; border:1px solid var(--line); color:var(--mute); }
   .clave.activa { color:var(--ok); border-color:var(--ok); font-weight:600; }
-  .franja.cambio { background:rgba(139,92,246,.18); color:var(--ink); border-color:var(--brand); }
+  .franja.cambio { background:#eff6ff; color:var(--info); border-color:#bfdbfe; }
+  .enuso { color:var(--info); }
+  .clave.vacia { border-style:dashed; color:var(--mute); }
   .clave.en_espera { color:var(--bad); border-color:var(--bad); }
 
   /* cuerpo en 3 columnas */
@@ -84,6 +87,17 @@
   .m { max-width:82%; padding:9px 12px; border-radius:14px; word-wrap:break-word; box-shadow:var(--sombra); }
   .m.agente { background:var(--agente); align-self:flex-start; border-bottom-left-radius:4px; }
   .m.usuario { background:var(--yo); align-self:flex-end; border-bottom-right-radius:4px; }
+  .m .acc a { color:var(--mute); text-decoration:underline; }
+  .fotos { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .fotos figure { margin:0; width:96px; } .fotos img { width:96px; height:72px; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
+  .fotos figcaption { font-size:11px; color:var(--mute); line-height:1.2; margin-top:2px; }
+  .prod { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .prod img, .prod .sinfoto { width:56px; height:42px; flex:none; border-radius:8px; object-fit:cover; background:var(--soft); border:1px solid var(--line); }
+  .prod .sinfoto { display:grid; place-items:center; font-size:10px; color:var(--mute); }
+  .prod-info { flex:1; min-width:0; } .prod-info b, .prod-info small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .prod-info small { color:var(--mute); font-size:11.5px; }
+  button.boton, label.boton { font:inherit; cursor:pointer; border:1px solid var(--line); background:var(--panel); padding:5px 12px; border-radius:99px; white-space:nowrap; font-size:12.5px; }
+  label.boton:hover { border-color:var(--mute); background:var(--soft); }
   .m small { display:block; margin-top:4px; color:var(--mute); font-size:11px; }
   .m audio { width:100%; height:34px; margin-top:6px; }
   .escribiendo { color:var(--mute); font-style:italic; padding-left:4px; }
@@ -93,7 +107,8 @@
   @keyframes latido { 50% { opacity:.6; } }
   .vozcheck { display:flex; align-items:center; gap:4px; color:var(--mute); white-space:nowrap; font-size:12px; cursor:pointer; }
   .estado-vacio { margin:auto; text-align:center; color:var(--mute); padding:30px; }
-  .estado-vacio .grande { font-size:42px; }
+  .estado-vacio .grande { font-size:15px; font-weight:600; color:var(--mute); }
+  a { color:var(--acento); }
 
   /* pestañas derecha */
   .tabs { display:flex; gap:2px; padding:8px 10px 0; border-bottom:1px solid var(--line); overflow-x:auto; }
@@ -120,7 +135,7 @@
   .paso::after { content:""; position:absolute; top:7px; left:-50%; width:100%; height:2px; background:var(--line); }
   .paso:first-child::after { display:none; }
   .paso.hecho { color:var(--ink); } .paso.hecho::before, .paso.hecho::after { background:var(--ok); }
-  .paso.actual::before { background:var(--brand); box-shadow:0 0 0 4px rgba(139,92,246,.35); }
+  .paso.actual::before { background:var(--brand); box-shadow:0 0 0 4px rgba(37,99,235,.2); }
   table { width:100%; border-collapse:collapse; font-size:12.5px; }
   td,th { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); }
   th { color:var(--mute); font-weight:600; }
@@ -131,9 +146,9 @@
   .ev .t { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
   .ev .ms { margin-left:auto; color:var(--mute); font-size:11px; }
   .ev .res { color:var(--mute); font-size:12.5px; word-break:break-word; }
-  .ev.usuario { border-color:var(--ok); } .ev.llm { border-color:#b79bff; } .ev.herr { border-color:var(--info); }
-  .ev.sis { border-color:var(--warn); } .ev.err { border-color:var(--bad); background:rgba(198,40,40,.07); }
-  .ev.voz { border-color:#d63384; }
+  .ev.usuario { border-color:var(--ok); } .ev.llm { border-color:#94a3b8; } .ev.herr { border-color:var(--info); }
+  .ev.sis { border-color:var(--warn); } .ev.err { border-color:var(--bad); background:#fef2f2; }
+  .ev.voz { border-color:#64748b; }
   pre { margin:4px 0 0; padding:6px 8px; background:var(--soft); border-radius:6px; overflow:auto; font-size:11.5px; max-height:170px; }
 
   /* voz */
@@ -145,9 +160,9 @@
   input[type=range] { width:100%; accent-color:var(--brand); }
 
   /* ventana modal */
-  .velo { position:fixed; inset:0; background:rgba(8,10,20,.55); display:grid; place-items:center; z-index:30; }
+  .velo { position:fixed; inset:0; background:rgba(15,23,42,.45); display:grid; place-items:center; z-index:30; }
   .modal { background:var(--panel); border-radius:16px; padding:22px; width:min(380px,92vw); display:grid; gap:12px;
-           box-shadow:0 20px 60px rgba(0,0,0,.35); }
+           box-shadow:0 20px 60px rgba(15,23,42,.2); }
   footer.pie { font-size:11px; color:var(--mute); padding:6px 18px; background:var(--panel); border-top:1px solid var(--line); }
 
   @media (max-width:1180px) {
@@ -163,33 +178,16 @@
   <div class="cabecera">
   <!-- ============ barra superior ============ -->
   <div class="top">
-    <div class="marca"><div class="logo">🛵</div>
+    <div class="marca"><div class="logo">D</div>
       <div>Despachador de domicilios<small>Agente de IA · Mocoa, Putumayo</small></div></div>
     <div class="kpi"><b>{{ conversaciones.length }}</b><span>conversaciones</span></div>
     <div class="kpi"><b>{{ pedidosActivos }}</b><span>pedidos en curso</span></div>
     <div class="kpi"><b>{{ pedidosEntregados }}</b><span>entregados</span></div>
     <div class="kpi"><b>{{ promedio }}</b><span>seg. por respuesta</span></div>
-    <span class="pill">{{ estado.modelo || '…' }}</span>
     <span class="pill" :class="{on: estado.pensando}">{{ estado.pensando ? 'pensando…' : 'listo' }}</span>
     <button class="peligro" @click="reiniciarDemo" title="Borra conversaciones, pedidos y bitácora">Reiniciar demo</button>
   </div>
 
-  <!-- estado de las claves de Gemini -->
-  <div class="franja" v-if="estado.gemini">
-    <b>🔑 Gemini · {{ estado.gemini.modelo }}</b>
-    <span v-for="k in estado.gemini.claves" :key="k.n" class="clave" :class="k.estado"
-          :title="'Respuestas dadas: ' + k.usos + ' · fallos: ' + k.fallos">
-      {{ textoClave(k) }}
-    </span>
-    <b style="color:var(--bad)" v-if="estado.gemini.todas_agotadas">⚠ Todas las claves de Gemini están agotadas o en espera: se responde con el modelo local.</b>
-    <b style="color:var(--bad)" v-else-if="estado.gemini.respaldo_local_reciente">⚠ La última respuesta salió del modelo local (Gemini no respondió).</b>
-  </div>
-  <div class="franja cambio" v-if="estado.gemini && estado.gemini.cambio_reciente">
-    🔄 Se agotó o falló la clave {{ estado.gemini.cambio_reciente.de }} y el agente siguió automáticamente con la clave {{ estado.gemini.cambio_reciente.a }}.
-  </div>
-  <div class="franja aviso" v-if="estado.proveedor === 'gemini'">
-    ⚠ Con Gemini (Google) los mensajes del chat se envían a Google para generar la respuesta. Usa solo datos de prueba (nombres y direcciones ficticios).
-  </div>
   </div><!-- cabecera -->
 
   <!-- ============ cuerpo ============ -->
@@ -197,7 +195,7 @@
 
     <!-- ---- banco de conversaciones ---- -->
     <section class="col">
-      <header><h2>💬 Conversaciones</h2><button class="primario" @click="abrirNueva">+ Nueva</button></header>
+      <header><h2>Conversaciones</h2><button class="primario" @click="abrirNueva">+ Nueva</button></header>
       <div class="buscador">
         <input type="search" v-model="buscar" placeholder="Buscar por nombre o mensaje…">
         <div class="filtros">
@@ -215,7 +213,7 @@
             <div class="ultimo">{{ c.ultimo ? (c.ultimo_rol === 'usuario' ? 'Cliente: ' : 'Agente: ') + plano(c.ultimo) : 'Conversación nueva' }}</div>
             <div class="marcas">
               <span v-if="c.estado_pedido" class="badge" :class="'e-' + c.estado_pedido">pedido: {{ c.estado_pedido.replace('_',' ') }}</span>
-              <span v-if="c.escalada" class="badge alerta">⚠ humano</span>
+              <span v-if="c.escalada" class="badge alerta">humano</span>
               <span class="badge">{{ c.mensajes }} msj</span>
               <span v-if="c.pedidos" class="badge">{{ c.pedidos }} pedido(s)</span>
             </div>
@@ -230,27 +228,34 @@
         <header class="chat-cab">
           <div class="avatar" :style="{background: color(actual.nombre)}">{{ inicial(actual.nombre) }}</div>
           <h2>{{ actual.nombre }}<small>{{ actual.mensajes }} mensajes · {{ actual.pedidos }} pedido(s)</small></h2>
-          <button class="fantasma peligro" @click="borrar" title="Eliminar esta conversación">🗑</button>
+          <button class="fantasma" @click="limpiarContexto" title="Borra los mensajes para que el agente olvide la conversación (conserva los pedidos)">Limpiar contexto</button>
+          <button class="fantasma peligro" @click="borrar" title="Eliminar esta conversación">Eliminar</button>
         </header>
         <div class="scroll mensajes" ref="chat">
-          <div v-if="!mensajes.length && !estado.pensando" class="vacio">Escribe o graba un mensaje para empezar.</div>
+          <div v-if="!mensajes.length && !pensandoAqui" class="vacio">Escribe o graba un mensaje para empezar.</div>
           <div v-for="m in mensajes" :key="m.id" class="m" :class="m.rol">
             <div v-html="fmt(m.contenido)"></div>
+            <div class="fotos" v-if="fotosDe(m).length">
+              <figure v-for="f in fotosDe(m)" :key="f.id"><img :src="f.imagen" :alt="f.nombre"><figcaption>{{ f.nombre }}</figcaption></figure>
+            </div>
             <audio v-if="m.audio" controls :src="m.audio" preload="none"></audio>
-            <small>{{ hora(m.creado_en) }}<template v-if="m.canal === 'voz'"> · 🎤 voz</template><template v-if="m.ms_respuesta"> · {{ (m.ms_respuesta/1000).toFixed(1) }} s</template></small>
+            <small>{{ hora(m.creado_en) }}<template v-if="m.canal === 'voz'"> · voz</template><template v-if="m.ms_respuesta"> · {{ (m.ms_respuesta/1000).toFixed(1) }} s</template>
+              <span class="acc"> · <a href="#" @click.prevent="borrarMsg(m)" title="Quita solo este mensaje del contexto">Borrar</a>
+              · <a href="#" @click.prevent="borrarMsg(m, true)" title="Quita este mensaje y todos los siguientes">Borrar desde aquí</a></span></small>
           </div>
-          <div class="escribiendo" v-if="estado.pensando">El agente está pensando…</div>
+          <div class="escribiendo" v-if="pensandoAqui">El agente está pensando… puedes escribir algo más o pulsar Detener para corregir.</div>
         </div>
         <div class="compositor">
           <button class="mic" :class="{grabando: grabando}" :disabled="enviandoVoz" @click="alternarMic"
-                  title="Pulsa para grabar y vuelve a pulsar para enviar">{{ enviandoVoz ? '…' : (grabando ? '⏹' : '🎤') }}</button>
-          <label class="vozcheck" title="El agente responde también con audio"><input type="checkbox" v-model="hablar"> 🔊</label>
-          <input type="text" v-model="texto" @keydown.enter="enviar" placeholder="Escribe tu pedido…" autocomplete="off">
+                  title="Pulsa para grabar y vuelve a pulsar para enviar">{{ enviandoVoz ? '…' : (grabando ? 'Enviar' : 'Hablar') }}</button>
+          <label class="vozcheck" title="El agente responde también con audio"><input type="checkbox" v-model="hablar"> Respuesta en audio</label>
+          <input type="text" v-model="texto" @keydown.enter="enviar" placeholder="Escribe tu pedido… (puedes seguir escribiendo mientras el agente piensa)" autocomplete="off">
+          <button class="peligro" v-if="pensandoAqui" @click="detener" title="Detiene al agente y devuelve tu último mensaje al cuadro de texto para corregirlo">Detener</button>
           <button class="primario" @click="enviar">Enviar</button>
         </div>
       </template>
       <div v-else class="estado-vacio">
-        <div class="grande">💬</div>
+        
         <p><b>Selecciona una conversación</b><br>o crea una nueva para hablar con el agente.</p>
         <button class="primario" @click="abrirNueva">+ Nueva conversación</button>
       </div>
@@ -264,6 +269,7 @@
         <button class="tab" :class="{act: tab==='restaurante'}" @click="tab='restaurante'">Restaurante<span class="n" v-if="pendientesRest.length">{{ pendientesRest.length }}</span></button>
         <button class="tab" :class="{act: tab==='domiciliario'}" @click="tab='domiciliario'">Domiciliario<span class="n" v-if="entregas.length">{{ entregas.length }}</span></button>
         <button class="tab" :class="{act: tab==='tablero'}" @click="tab='tablero'">Tablero</button>
+        <button class="tab" :class="{act: tab==='menu'}" @click="tab='menu'; cargarProductos()">Menú</button>
         <button class="tab" :class="{act: tab==='voz'}" @click="tab='voz'; cargarVoces()">Voz</button>
       </div>
 
@@ -298,7 +304,7 @@
             <tr><td>Domicilio</td><td style="text-align:right">{{ dinero(p.costo_domicilio) }}</td></tr>
             <tr><td><b>Total</b></td><td style="text-align:right"><b>{{ dinero(p.total) }}</b></td></tr>
           </table>
-          <div class="vacio" style="text-align:left;padding:6px 0 0">📍 {{ p.direccion_entrega }} · 💵 {{ p.metodo_pago || '—' }}<span v-if="p.domiciliario"> · 🛵 {{ p.domiciliario }}</span></div>
+          <div class="vacio" style="text-align:left;padding:6px 0 0">Entrega: {{ p.direccion_entrega }} · Pago: {{ p.metodo_pago || '—' }}<span v-if="p.domiciliario"> · Domiciliario: {{ p.domiciliario }}</span> · <a :href="'/api/pedido/' + p.id + '/recibo' " target="_blank">Recibo PDF</a></div>
         </div>
       </div>
 
@@ -358,6 +364,23 @@
             <tr v-for="h in metricas.herramientas.slice(0, 12)" :key="h.herramienta"><td>{{ h.herramienta }}</td><td style="text-align:right">{{ h.n }}×</td><td style="text-align:right">{{ h.ms_promedio != null ? seg(h.ms_promedio) + ' s' : '' }}</td></tr>
           </table>
         </template>
+      </div>
+
+      <!-- menú: fotos de los productos -->
+      <div class="scroll panel" v-show="tab==='menu'">
+        <p style="margin-top:0;color:var(--mute)">Sube una foto por producto (PNG, JPG o WEBP, máximo 3 MB). El Word del menú solo trae texto, así que las fotos se agregan aquí o con <code>importar_imagenes.py</code>. Aparecen en el chat cuando el agente nombra el producto.</p>
+        <div class="fila" style="gap:8px;margin-bottom:8px">
+          <input type="search" v-model="busquedaProd" @input="cargarProductos" placeholder="Buscar producto o restaurante…">
+          <label class="vozcheck"><input type="checkbox" v-model="soloSinFoto" @change="cargarProductos"> Solo sin foto</label>
+        </div>
+        <div class="vacio" style="text-align:left;padding:0 0 8px">{{ prodInfo.con_imagen }} de {{ prodInfo.total }} con foto{{ prodInfo.total > productos.length ? ' · mostrando ' + productos.length : '' }}</div>
+        <div v-for="p in productos" :key="p.id" class="prod">
+          <img v-if="p.imagen" :src="p.imagen" alt="">
+          <div v-else class="sinfoto">sin foto</div>
+          <div class="prod-info"><b>{{ p.nombre }}</b><small>{{ p.restaurante }} · {{ dinero(p.precio) }} · id {{ p.id }}</small></div>
+          <label class="boton"><input type="file" accept="image/png,image/jpeg,image/webp" hidden @change="subirImagen(p, $event)">{{ p.imagen ? 'Cambiar' : 'Subir foto' }}</label>
+          <button class="fantasma peligro" v-if="p.imagen" @click="quitarImagen(p)">Quitar</button>
+        </div>
       </div>
 
       <!-- voz -->
@@ -420,7 +443,7 @@ const ROTULOS = {
   mensaje_usuario: ['El cliente escribe', 'usuario'], stt: ['Voz → texto (faster-whisper)', 'voz'], tts: ['Texto → voz (Piper)', 'voz'],
   llm: ['El modelo decide', 'llm'], llm_interpreta: ['El modelo local interpreta el mensaje', 'llm'], llm_redacta: ['El modelo local redacta', 'llm'],
   respuesta_agente: ['Respuesta enviada al cliente', 'usuario'], evento_sistema: ['Evento de la plataforma → agente', 'sis'],
-  notificar_restaurante: ['Pedido enviado al restaurante', 'sis'], escalar_a_humano: ['⚠ Escalado a un humano', 'err'],
+  notificar_restaurante: ['Pedido enviado al restaurante', 'sis'], escalar_a_humano: ['Escalado a un humano', 'err'],
   asignacion_de_respaldo: ['Asignación de respaldo (reglas)', 'sis'], programado_enviado_al_restaurante: ['Pedido programado → restaurante', 'sis'],
   respaldo_ollama: ['↪ Se usó el modelo local de respaldo', 'err'], gemini_reintento: ['Gemini ocupado: reintento', 'sis'],
   gemini_modelo_de_respaldo: ['Modelo de Gemini de respaldo', 'sis'], gemini_cambio_de_clave: ['Cambio de clave de Gemini', 'sis'],
@@ -429,6 +452,7 @@ const ROTULOS = {
 Vue.createApp({
   data() {
     return {
+      productos: [], prodInfo: {con_imagen: 0, total: 0}, busquedaProd: '', soloSinFoto: false, catalogo: [],
       estado: {pedidos: [], domiciliarios: [], modelo: '', proveedor: '', pensando: false, gemini: null},
       conversaciones: [], sel: new URLSearchParams(location.search).get('c') || ls.get('sesion_id'), buscar: '', filtro: 'todas',
       mensajes: [], ultimoMsg: 0, eventos: [], ultimoEv: 0, verDatos: false,
@@ -441,6 +465,7 @@ Vue.createApp({
   },
   computed: {
     actual() { return this.conversaciones.find(c => c.sesion_id === this.sel) || null; },
+    pensandoAqui() { return !!this.sel && (this.estado.pensando_sesiones || []).includes(this.sel); },
     filtradas() {
       const t = this.buscar.trim().toLowerCase();
       return this.conversaciones.filter(c => {
@@ -464,7 +489,7 @@ Vue.createApp({
     /* ---------- utilidades de formato ---------- */
     esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); },
     fmt(t) {   // Markdown mínimo seguro: **negrita**, *cursiva*, saltos de línea
-      return this.esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|[^*])\*(?!\s)([^*\n]+?)\*(?!\*)/g, '$1<i>$2</i>').replace(/\n/g, '<br>');
+      return this.esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|[^*])\*(?!\s)([^*\n]+?)\*(?!\*)/g, '$1<i>$2</i>').replace(/(\/api\/pedido\/\d+\/recibo)/g, '<a href="$1" target="_blank">Ver recibo en PDF</a>').replace(/\n/g, '<br>');
     },
     plano(t) { return String(t || '').replace(/[*_`#]/g, '').replace(/\s+/g, ' ').slice(0, 80); },
     dinero(n) { return '$' + Number(n || 0).toLocaleString('es-CO'); },
@@ -479,9 +504,15 @@ Vue.createApp({
     inicial(n) { return (n || '?').trim().charAt(0).toUpperCase(); },
     color(n) { let h = 0; for (const c of String(n)) h = (h * 31 + c.charCodeAt(0)) % 360; return `hsl(${h} 55% 45%)`; },
     indicePaso(p) { return Math.max(0, this.PASOS.findIndex(s => s.id === p.estado)); },
+    tituloClave(k) {
+      const ag = (k.modelos_agotados || []).map(a => `${a.modelo} (vuelve en ${this.tiempo(a.espera_s)})`);
+      return `Respuestas dadas: ${k.usos} · fallos: ${k.fallos}` + (ag.length ? ' · Sin cupo: ' + ag.join(', ') : '');
+    },
+    tiempo(s) { return s >= 3600 ? Math.round(s / 3600) + ' h' : s >= 60 ? Math.round(s / 60) + ' min' : s + ' s'; },
     textoClave(k) {
-      if (k.estado === 'activa') return `Casilla ${k.n}: activa` + (this.estado.gemini.ultima_usada === k.n ? ' (la que respondió)' : '');
-      if (k.estado === 'lista') return `Casilla ${k.n}: de reserva`;
+      const ag = (k.modelos_agotados || []).length, nota = ag ? ` · ${ag} modelo(s) sin cupo` : '';
+      if (k.estado === 'activa') return `Casilla ${k.n}: activa` + (this.estado.gemini.ultima_usada === k.n ? ' (la que respondió)' : '') + nota;
+      if (k.estado === 'lista') return `Casilla ${k.n}: de reserva` + nota;
       const s = k.espera_s, t = s >= 3600 ? Math.round(s / 3600) + ' h' : s >= 60 ? Math.round(s / 60) + ' min' : s + ' s';
       return `Casilla ${k.n}: ${k.agotada_hoy ? 'agotada · ' : ''}${k.motivo || 'en espera'}${s ? ' · reintento en ' + t : ''}`;
     },
@@ -491,8 +522,8 @@ Vue.createApp({
       const h = e.herramienta;
       if (ROTULOS[h]) return {rotulo: ROTULOS[h][0], clase: ROTULOS[h][1]};
       if (h.startsWith('error:')) return {rotulo: 'Error en ' + h.slice(6), clase: 'err'};
-      if (h.startsWith('restaurante_') || h.startsWith('domiciliario_')) return {rotulo: '👤 ' + h.replace('_', ' '), clase: 'sis'};
-      return {rotulo: '🔧 ' + h, clase: 'herr'};
+      if (h.startsWith('restaurante_') || h.startsWith('domiciliario_')) return {rotulo: 'Plataforma · ' + h.replace('_', ' '), clase: 'sis'};
+      return {rotulo: 'Herramienta · ' + h, clase: 'herr'};
     },
     resumen(e) {
       const s = e.salida || {}, i = e.entrada || {}, h = e.herramienta;
@@ -502,7 +533,7 @@ Vue.createApp({
       if (h === 'evento_sistema') return i.aviso;
       if (h.startsWith('error:')) return s.detalle;
       if (h === 'escalar_a_humano') return i.motivo;
-      if (s.error) return '✗ ' + s.error;
+      if (s.error) return 'Error: ' + s.error;
       if (s.total != null) return 'total ' + this.dinero(s.total) + (s.estado ? ' · ' + s.estado : '');
       if (s.estado) return 'estado: ' + s.estado + (s.domiciliario ? ' · ' + s.domiciliario : '');
       if (s.candidatos) return s.candidatos.length + ' candidato(s): ' + s.candidatos.map(c => c.nombre).join(', ');
@@ -574,6 +605,65 @@ Vue.createApp({
       try { await post('/api/chat', {sesion_id: this.sel, texto: t, hablar: this.hablar}); this.tick(); }
       catch (e) { alert(e.message); }
     },
+    /* ---------- fotos de productos ---------- */
+    async cargarProductos() {
+      const qs = new URLSearchParams({texto: this.busquedaProd, solo_sin_imagen: this.soloSinFoto});
+      try {
+        const d = await api('/api/productos?' + qs);
+        this.productos = d.productos.slice(0, 60); this.prodInfo = {con_imagen: d.con_imagen, total: d.total};
+        if (!this.busquedaProd && !this.soloSinFoto) this.catalogo = d.productos.filter(p => p.imagen);
+        else this.cargarCatalogo();
+      } catch (e) { /* sin red: se reintenta al abrir la pestaña */ }
+    },
+    async cargarCatalogo() {
+      try { this.catalogo = (await api('/api/productos')).productos.filter(p => p.imagen); } catch (e) { /* ignorar */ }
+    },
+    async subirImagen(p, ev) {
+      const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
+      const fd = new FormData(); fd.append('imagen', f);
+      try { await api(`/api/productos/${p.id}/imagen`, {method: 'POST', body: fd}); await this.cargarProductos(); await this.cargarCatalogo(); }
+      catch (e) { alert(e.message); }
+    },
+    async quitarImagen(p) {
+      try { await api(`/api/productos/${p.id}/imagen`, {method: 'DELETE'}); await this.cargarProductos(); await this.cargarCatalogo(); }
+      catch (e) { alert(e.message); }
+    },
+    fotosDe(m) {   // fotos de los productos que el agente nombra en su mensaje
+      if (m.rol !== 'agente' || !this.catalogo.length) return [];
+      const t = this.sinTildes(m.contenido), vistos = new Set(), out = [];
+      for (const p of this.catalogo) {
+        const n = this.sinTildes(p.nombre);
+        if (n.length >= 4 && t.includes(n) && !vistos.has(p.imagen.split('?')[0])) { vistos.add(p.imagen.split('?')[0]); out.push(p); }
+        if (out.length === 4) break;
+      }
+      return out;
+    },
+    sinTildes(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); },
+    async detener() {
+      if (!this.sel) return;
+      const pendientes = [];  // mensajes del cliente que el agente aún no había contestado
+      for (let i = this.mensajes.length - 1; i >= 0 && this.mensajes[i].rol === 'usuario'; i--) pendientes.unshift(this.mensajes[i]);
+      try {
+        await post('/api/chat/detener', {sesion_id: this.sel});
+        if (pendientes.length) {   // se quitan del contexto y vuelven al cuadro para corregirlos
+          await api(`/api/mensajes/${pendientes[0].id}?sesion_id=${this.sel}&desde_aqui=true`, {method: 'DELETE'});
+          if (!this.texto.trim()) this.texto = pendientes.map(m => m.contenido).join(' ');
+          await this.recargarMensajes();
+        }
+        this.tick();
+      } catch (e) { alert(e.message); }
+    },
+    async recargarMensajes() { this.mensajes = []; this.ultimoMsg = 0; this.primera = true; await this.tick(); },
+    async borrarMsg(m, desdeAqui = false) {
+      const txt = desdeAqui ? 'Se borrará este mensaje y todos los siguientes. ¿Continuar?' : '¿Borrar este mensaje de la conversación?';
+      if (!confirm(txt)) return;
+      try { await api(`/api/mensajes/${m.id}?sesion_id=${this.sel}&desde_aqui=${desdeAqui}`, {method: 'DELETE'}); await this.recargarMensajes(); }
+      catch (e) { alert(e.message); }
+    },
+    async limpiarContexto() {
+      if (!this.actual || !confirm('¿Borrar todos los mensajes? El agente olvidará la conversación, pero se conservan los pedidos.')) return;
+      try { await post(`/api/conversaciones/${this.sel}/limpiar`); await this.recargarMensajes(); } catch (e) { alert(e.message); }
+    },
     async alternarMic() {
       if (!this.sel) return;
       if (this.rec) { this.rec.stop(); return; }
@@ -615,11 +705,11 @@ Vue.createApp({
     },
     async guardarVoz() {
       const d = await post('/api/voces/config', this.vozCfg); this.vozCfg = d.actual;
-      this.vozMsg = '✓ Voz guardada: el agente hablará así desde ahora.'; setTimeout(() => this.vozMsg = '', 4000);
+      this.vozMsg = 'Voz guardada: el agente hablará así desde ahora.'; setTimeout(() => this.vozMsg = '', 4000);
     },
   },
   mounted() {
-    this.tick(); setInterval(this.tick, 1500); this.cargarVoces();
+    this.tick(); setInterval(this.tick, 1500); this.cargarVoces(); this.cargarCatalogo();
   },
 }).mount('#app');
 </script>

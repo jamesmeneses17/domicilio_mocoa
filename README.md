@@ -10,15 +10,19 @@ en una sola pantalla el chat, el restaurante, el domiciliario, el tablero y **ca
 
 ## Usar Gemini (opcional)
 1. Abre el archivo `.env` y pega tus claves después del `=`:
-   `GEMINI_API_KEY_1=…`, `GEMINI_API_KEY_2=…`, `GEMINI_API_KEY_3=…`
+   `GEMINI_API_KEY_1=…` hasta `GEMINI_API_KEY_4=…`
 2. Valídalas (no muestra las claves): `.venv\Scripts\python probar_gemini.py`.
    También lista los modelos Flash disponibles para tu cuenta; el elegido va en `GEMINI_MODEL`.
 3. Reinicia con `.\iniciar.ps1`. Con al menos una clave, `LLM_PROVEEDOR=auto` usa Gemini.
 
-**Rotación de claves.** Se usa la clave 1 hasta que falle; entonces se pasa a la 2 y luego a la 3.
-Límite por minuto → esa clave descansa 65 s; cupo diario agotado → 6 h; clave inválida → 24 h; error de Google → 15 s.
-Cada fallo queda en la tabla `errores` y en el panel de proceso ("clave #2: HTTP 429…") **sin imprimir la clave**.
-Si todas fallan, con `GEMINI_FALLBACK_OLLAMA=1` el agente sigue con el modelo local (y lo registra).
+**Rotación de claves y modelos.** Hasta 4 claves (`GEMINI_API_KEY_1` a `_4`). El cupo gratuito es por clave **y por modelo**
+(unas 20 peticiones al día cada uno): si una combinación responde 429 se marca agotada y se pasa a la siguiente (otro modelo
+con la misma clave, luego la otra clave) sin esperar. Los modelos se definen en `GEMINI_MODEL` y `GEMINI_MODELOS_RESPALDO`.
+El estado se guarda en `.gemini_estado.json` y la franja superior de la web muestra la casilla y el modelo en uso.
+Una petición sin respuesta se corta a los `GEMINI_TIMEOUT` segundos. Si todo falla, con `GEMINI_FALLBACK_OLLAMA=1` sigue el modelo local.
+
+**Conversación.** El botón *Detener* cancela el turno en curso y devuelve el mensaje al cuadro para corregirlo; un mensaje nuevo
+reemplaza al que estaba pensando. Cada mensaje se puede borrar (o "borrar desde aquí") y *Limpiar contexto* vacía la conversación.
 
 ## Cambiar de modelo para comparar
 | Quiero… | En `.env` |
@@ -88,3 +92,14 @@ El panel "Proceso del agente" y `/api/metricas` muestran herramientas llamadas, 
 - Los 4 restaurantes de demostración quedaron **ocultos** (`activo=false`), no borrados. Para volver a verlos:
   `UPDATE restaurantes SET activo=true WHERE fuente='demo';`
 - Las bebidas alcohólicas existen en la base pero el agente no las ofrece ni recomienda; solo las muestra si el cliente las pide.
+
+## Fotos de productos
+El Word del menú no trae imágenes. Se agregan aparte (PNG, JPG o WEBP, máximo 3 MB):
+- Pestaña **Menú** de la web: buscar el producto y pulsar *Subir foto*.
+- En lote: `.venv\Scripts\python importar_imagenes.py <carpeta> [--simular]`. Cada archivo se llama como el id del producto
+  (`12.jpg`), como el producto (`Sopa del día.jpg`) o `Restaurante - Producto.jpg`.
+Se guardan en `app/static/productos/` (ruta en `productos.imagen`) y salen en el chat cuando el agente nombra el producto.
+
+## Cómo se alimentó la base de conocimiento
+`importar_menu.py` (Word → tablas `restaurantes` y `productos`) y luego `cargar_conocimiento.py` (políticas, preguntas frecuentes,
+apodos de lugares y una ficha por producto → embeddings de embeddinggemma de 768 dimensiones → tabla `conocimiento` con pgvector).

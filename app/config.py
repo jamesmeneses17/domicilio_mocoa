@@ -31,7 +31,8 @@ _prov = os.getenv("LLM_PROVEEDOR", "auto").strip().lower()
 # Nunca se escriben en el código, ni se muestran en la interfaz o en la bitácora.
 GEMINI_KEYS = []
 GEMINI_SLOTS = []  # número de casilla del .env de cada clave (GEMINI_API_KEY_<n>), para mostrar la numeración real
-for _i in range(1, 10):
+GEMINI_MAX_CLAVES = 4  # casillas GEMINI_API_KEY_1..4 en el .env
+for _i in range(1, GEMINI_MAX_CLAVES + 1):
     _k = os.getenv(f"GEMINI_API_KEY_{_i}", "").strip()
     if len(_k) >= 20 and not _k.upper().startswith("PEGA"):
         GEMINI_KEYS.append(_k)
@@ -61,6 +62,9 @@ UMBRAL_SIMILITUD = float(os.getenv("UMBRAL_SIMILITUD", "0.5"))
 MODO = os.getenv("AGENTE_MODO", "herramientas" if PROVEEDOR == "gemini" else "guiado")
 
 NOMBRE_EMPRESA = os.getenv("NOMBRE_EMPRESA", "DomiMocoa")
+# Datos para pagar por transferencia (se muestran en el chat y en el recibo PDF). Cámbialos en .env: son de prueba.
+PAGO_TRANSFERENCIA = os.getenv("PAGO_TRANSFERENCIA",
+                               "Nequi o Daviplata al 300 000 0000, a nombre de DomiMocoa (datos de prueba).")
 WHISPER_MODELO = os.getenv("WHISPER_MODELO", "base")
 VOZ_PIPER = os.path.join(RAIZ, "voz_modelos", "es_MX-ald-medium.onnx")
 AUDIO_DIR = os.path.join(RAIZ, "audio_tmp")

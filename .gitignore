@@ -4,3 +4,4 @@ audio_tmp/
 voz_modelos/
 __pycache__/
 *.pyc
+.gemini_estado.json

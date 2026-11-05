@@ -11,6 +11,8 @@
   reenvía en cada turno, igual que con el modelo local.
 * Embeddings, voz, PostgreSQL y pgvector siguen siendo locales; a Google solo viaja el diálogo.
 """
+import json
+import os
 import re
 import threading
 import time
@@ -68,29 +70,79 @@ def marcar_respaldo():
     _ultima["respaldo"] = time.time()
 
 
+def _siguiente():
+    """(clave, modelo) con el que se atenderá la próxima petición: la primera combinación con cupo."""
+    ahora = time.time()
+    pares, _ = _pares_en_orden()
+    for idx, modelo in pares:
+        if _cooldown.get(idx, 0) <= ahora and _cuota.get((idx, modelo), 0) <= ahora:
+            return idx, modelo
+    return None
+
+
 def estado_claves():
     """Estado de cada clave, sin secretos: cuál está activa, cuál descansa y por qué.
     Los números son los de las casillas del .env (GEMINI_API_KEY_<n>)."""
     ahora = time.time()
     n = len(config.GEMINI_KEYS)
     libres = [i for i in range(1, n + 1) if _cooldown.get(i, 0) <= ahora]
-    en_uso = libres[0] if libres else None  # la que se usará en la próxima petición
+    sig = _siguiente()  # lo que se usará en la próxima petición
+    en_uso = sig[0] if sig else None
     claves = []
     for i in range(1, n + 1):
         m = _m(i)
         espera = max(0, int(_cooldown.get(i, 0) - ahora))
+        agotados = [{"modelo": mod, "espera_s": int(t - ahora)} for (k, mod), t in _cuota.items()
+                    if k == i and t > ahora]
         claves.append({"n": config.GEMINI_SLOTS[i - 1],
                        "estado": "activa" if i == en_uso else ("lista" if i in libres else "en_espera"),
                        "motivo": m["motivo"] if i not in libres else None, "espera_s": espera,
                        "usos": m["usos"], "fallos": m["fallos"], "ultimo_uso": m["ultimo_uso"],
+                       "modelos_agotados": agotados,
                        "agotada_hoy": bool(i not in libres and espera > 3600)})
-    return {"configuradas": n, "disponibles": len(libres),
+    vacias = [i for i in range(1, config.GEMINI_MAX_CLAVES + 1) if i not in config.GEMINI_SLOTS]
+    return {"configuradas": n, "disponibles": len(libres), "maximo": config.GEMINI_MAX_CLAVES, "casillas_vacias": vacias,
             "en_uso": config.GEMINI_SLOTS[en_uso - 1] if en_uso else None,
+            "siguiente_modelo": sig[1] if sig else None,
             "ultima_usada": _ultima["clave"], "modelo": _ultima["modelo"] or config.GEMINI_MODEL,
-            "todas_agotadas": n > 0 and not libres,
+            "todas_agotadas": n > 0 and not sig,
             "respaldo_local_reciente": ahora - _ultima["respaldo"] < 180,
             "cambio_reciente": (_ultima["cambio"] if _ultima["cambio"] and ahora - _ultima["cambio"]["en"] < 300 else None),
             "claves": claves}
+
+
+_ARCHIVO_ESTADO = os.path.join(config.RAIZ, ".gemini_estado.json")
+
+
+def _guardar():
+    """Guarda qué combinaciones están agotadas para no volver a probarlas (y perder segundos) tras reiniciar."""
+    ahora = time.time()
+    try:
+        datos = {"cuota": {f"{config.GEMINI_SLOTS[k - 1]}|{m}": t for (k, m), t in _cuota.items()
+                           if t > ahora and k <= len(config.GEMINI_SLOTS)},
+                 "cooldown": {str(config.GEMINI_SLOTS[k - 1]): t for k, t in _cooldown.items()
+                              if t > ahora and k <= len(config.GEMINI_SLOTS)}}
+        with open(_ARCHIVO_ESTADO, "w", encoding="utf-8") as f:
+            json.dump(datos, f)
+    except OSError:
+        pass
+
+
+def _cargar():
+    try:
+        with open(_ARCHIVO_ESTADO, encoding="utf-8") as f:
+            datos = json.load(f)
+    except (OSError, ValueError):
+        return
+    ahora = time.time()
+    idx = {slot: i + 1 for i, slot in enumerate(config.GEMINI_SLOTS)}
+    for k, t in (datos.get("cuota") or {}).items():
+        slot, _, modelo = k.partition("|")
+        if slot.isdigit() and int(slot) in idx and t > ahora:
+            _cuota[(idx[int(slot)], modelo)] = t
+    for slot, t in (datos.get("cooldown") or {}).items():
+        if slot.isdigit() and int(slot) in idx and t > ahora:
+            _cooldown[idx[int(slot)]] = t
 
 
 def _penalizar(idx, segundos, motivo=""):
@@ -99,6 +151,7 @@ def _penalizar(idx, segundos, motivo=""):
         m = _m(idx)
         m["motivo"] = motivo
         m["fallos"] += 1
+    _guardar()
 
 
 class _TiempoAgotado(Exception):
@@ -158,6 +211,7 @@ def llamar(sesion_id, **peticion):
         if _cooldown.get(idx, 0) > time.time() or idx in claves_limitadas or modelo in modelos_caidos \
                 or _cuota.get((idx, modelo), 0) > time.time():
             continue
+        agente.verificar()
         if time.time() > hasta:
             motivos.append(f"se agotó el tiempo máximo ({config.GEMINI_PRESUPUESTO}s)")
             break
@@ -210,6 +264,7 @@ def llamar(sesion_id, **peticion):
             causa = "límite diario agotado" if diaria else "límite por minuto"
             espera = min(_segundos_de_espera(texto_err) or (6 * 3600 if diaria else 65), 24 * 3600)
             _cuota[(idx, modelo)] = time.time() + espera
+            _guardar()
             motivos.append(f"clave #{slot}, {modelo}: {causa}")
             logica.registrar_error(sesion_id, "gemini", motivos[-1])
             hasta_libre = [_cuota.get((idx, m), 0) for m in {mm for _, mm in pares}]
@@ -229,6 +284,9 @@ def llamar(sesion_id, **peticion):
         motivos.append(f"clave #{slot}: HTTP {codigo} ({causa})")
         logica.registrar_error(sesion_id, "gemini", motivos[-1])
     raise NoDisponible("; ".join(motivos) or "Todas las claves están en espera por límite de uso.")
+
+
+_cargar()
 
 
 # ------------------------------------------------------------------ conversión de formatos
@@ -279,7 +337,7 @@ def ejecutar(sesion_id, despacho=False):
     ctx = {"sesion_id": sesion_id, "cliente_id": cli["id"] if cli else None}
     herramientas = agente.HERRAMIENTAS_CLIENTE + (agente.HERRAMIENTAS_DESPACHO if despacho else [])
     base = {
-        "system_instruction": agente.prompt_sistema(cli["nombre"] if cli else "cliente"),
+        "system_instruction": agente.prompt_sistema(cli["nombre"] if cli else "cliente", sesion_id),
         "tools": _herramientas(herramientas),
         "generation_config": {"temperature": 0.3, "max_output_tokens": 600},
     }
@@ -288,6 +346,7 @@ def ejecutar(sesion_id, despacho=False):
     final, fallos = "", 0
 
     for it in range(8):
+        agente.verificar()
         t0 = time.time()
         inter, clave, modelo = llamar(sesion_id, input=entrada, **base)
         ms = int((time.time() - t0) * 1000)
@@ -306,6 +365,7 @@ def ejecutar(sesion_id, despacho=False):
         # Se devuelven tal cual los pasos del modelo (incluye las firmas de razonamiento) y luego los resultados.
         entrada = entrada + [s.model_dump(exclude_none=True, by_alias=True) for s in pasos]
         for c in llamadas:
+            agente.verificar()  # si el cliente detuvo el turno no se ejecutan más herramientas (p. ej. crear_pedido)
             args = c.arguments or {}
             t1 = time.time()
             try:
